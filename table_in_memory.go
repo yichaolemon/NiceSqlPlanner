@@ -1,8 +1,41 @@
+package sql_planner
 import (
-  "fmt"
 )
 
 type ColumnType int
+type Field interface {
+  lessThan(a interface{}) bool
+  equals(b interface{}) bool
+}
+
+// int values in columns
+type IntField int
+func (f IntField) lessThan(a interface{}) bool {
+  return f < a.(IntField)
+}
+func (f IntField) equals(a interface{}) bool {
+  return f == a.(IntField)
+}
+
+
+// string values in columns
+type StringField string
+func (f StringField) lessThan(a interface{}) bool {
+  return f < a.(StringField)
+}
+func (f StringField) equals(a interface{}) bool {
+  return f == a.(StringField)
+}
+
+// boolean values in columns
+type BoolField bool
+func (f BoolField) lessThan(a interface{}) bool {
+  return !bool(f) && bool(a.(BoolField))
+}
+func (f BoolField) equals(a interface{}) bool {
+  return f == a.(BoolField)
+}
+
 const (
   INT ColumnType = 1
   STRING ColumnType = 2
@@ -28,8 +61,4 @@ type Index struct {
   schema []Column
   // B-Tree
   btree BTree
-}
-
-type  struct {
-
 }
