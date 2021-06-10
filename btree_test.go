@@ -76,3 +76,24 @@ func TestDelete(t *testing.T) {
   }
   assertRowsEqual(t, allKeys(tree), []Row{})
 }
+
+func TestRandomAccessInsertDelete(t *testing.T) {
+  tree := &BTree{}
+  tree.AssertWellFormed()
+  for i := 0; i < 64; i++ {
+    tree = tree.Insert(intKey((i*7) % 64))
+    tree.AssertWellFormed()
+    fmt.Println(tree)
+  }
+  var rows []Row
+  for i := 0; i < 64; i++ {
+    rows = append(rows, intKey(i))
+  }
+  assertRowsEqual(t, allKeys(tree), rows)
+  for i := 0; i < 64; i++ {
+    tree = tree.Delete(intKey((i*5) % 64))
+    tree.AssertWellFormed()
+    fmt.Println(tree)
+  }
+  assertRowsEqual(t, allKeys(tree), []Row{})
+}
