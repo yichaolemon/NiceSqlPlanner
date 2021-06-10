@@ -1,14 +1,37 @@
 package sql_planner
 import (
+  "fmt"
 )
 
 type Row []Field
-const MAX_NODE_SIZE = 100
+const MAX_NODE_SIZE = 6
 
 type BTree struct {
   // keys end with the primary key field
   keys []Row
   children []*BTree
+}
+
+func (t *BTree) String() string {
+  s := "{"
+  for i, key := range t.keys {
+    if t.IsLeaf() {
+      s += fmt.Sprintf("%v", key)
+      if i < len(t.keys)-1 {
+        s += " "
+      }
+    } else {
+      s += fmt.Sprintf("%s %v ", t.children[i], key)
+    }
+  }
+  if !t.IsLeaf() {
+    s += fmt.Sprintf("%s", t.children[len(t.children)-1])
+  }
+  return s+"}"
+}
+
+func (t *BTree) IsLeaf() bool {
+  return len(t.children) == 0
 }
 
 func (r Row) lessThan(a Row) bool {
@@ -47,7 +70,8 @@ func (t *BTree) delete(k Row) {
       break
     } else if k.equals(key) {
       if isLeaf {
-        t.keys = append(t.keys[:i], t.keys[i+1:]...)
+        suffix := copyKeys(t.keys[i+1:])
+        t.keys = append(t.keys[:i], suffix...)
       } else {
         // move up the largest element in the left subtree
         movingKey := t.children[i].max()
@@ -68,6 +92,7 @@ func (t *BTree) delete(k Row) {
       t.children[childIndex].delete(k)
     }
   }
+
   if !isLeaf {
     child := t.children[childIndex]
     // child.keys might be too small
@@ -78,21 +103,22 @@ func (t *BTree) delete(k Row) {
         // rebalance with sibling to the left
         siblingIndex, keyIndex = childIndex-1, childIndex-1
       }
-      if len(t.children[siblingIndex].keys) == MAX_NODE_SIZE/2 {
+      sibling := t.children[siblingIndex]
+      if len(sibling.keys) == MAX_NODE_SIZE/2 {
         // can't shuffle keys around in existing nodes, have to merge nodes
-        t.keys = append(t.keys[:keyIndex], t.keys[keyIndex+1:]...)
-        t.children = append(append(t.children[:keyIndex], &BTree{
+        mergedChild := &BTree{
           keys: append(append(t.children[keyIndex].keys, t.keys[keyIndex]), t.children[keyIndex+1].keys...),
-          children: append(t.children[keyIndex].children, t.children[keyIndex+1:]...),
-        }), t.children[keyIndex+1:]...)
+          children: append(t.children[keyIndex].children, t.children[keyIndex+1].children...),
+        }
+        t.keys = append(t.keys[:keyIndex], t.keys[keyIndex+1:]...)
+        t.children = append(append(t.children[:keyIndex], mergedChild), t.children[keyIndex+2:]...)
       } else {
         // shuffle key from sibling to child.
-        sibling := t.children[siblingIndex]
         if childIndex < siblingIndex {
           child.keys = append(child.keys, t.keys[keyIndex])
           t.keys[keyIndex] = sibling.keys[0]
           sibling.keys = sibling.keys[1:]
-          if len(sibling.children) > 0 {
+          if !sibling.IsLeaf() {
             child.children = append(child.children, sibling.children[0])
             sibling.children = sibling.children[1:]
           }
@@ -100,7 +126,7 @@ func (t *BTree) delete(k Row) {
           child.keys = append([]Row{t.keys[keyIndex]}, child.keys...)
           t.keys[keyIndex] = sibling.keys[len(sibling.keys)-1]
           sibling.keys = sibling.keys[:len(sibling.keys)-1]
-          if len(sibling.children) > 0 {
+          if !sibling.IsLeaf() {
             child.children = append([]*BTree{sibling.children[len(sibling.children)-1]}, child.children...)
             sibling.children = sibling.children[:len(sibling.children)-1]
           }
@@ -112,7 +138,7 @@ func (t *BTree) delete(k Row) {
 
 func (t *BTree) Delete(k Row) *BTree {
   t.delete(k)
-  if len(t.keys) == 0 {
+  if !t.IsLeaf() && len(t.keys) == 0 {
     return t.children[0]
   }
   return t
@@ -123,6 +149,71 @@ func (t *BTree) max() Row {
     return t.keys[len(t.keys)-1]
   }
   return t.children[len(t.children)-1].max()
+}
+
+func (t *BTree) min() Row {
+  if len(t.children) == 0 {
+    return t.keys[0]
+  }
+  return t.children[0].min()
+}
+
+func (t *BTree) height() int {
+  if len(t.children) == 0 {
+    return 1
+  }
+  return 1 + t.children[0].height()
+}
+
+func (t *BTree) AssertWellFormed() {
+  t.assertWellFormed(true)
+}
+
+func (t *BTree) assertWellFormed(isRoot bool) {
+  if len(t.keys) > MAX_NODE_SIZE {
+    panic(fmt.Sprintf("too many keys in node %s", t))
+  }
+  if !isRoot {
+    if len(t.keys) < MAX_NODE_SIZE/2 {
+      panic(fmt.Sprintf("too few keys in node %s", t))
+    }
+  }
+  height := t.height()
+  if len(t.children) > 0 {
+    if len(t.children) != len(t.keys)+1 {
+      panic(fmt.Sprintf("wrong number of children in node %s", t))
+    }
+    for i, k := range t.keys {
+      t.children[i].assertWellFormed(false)
+      if t.children[i].height() + 1 != height {
+        panic(fmt.Sprintf("tree height uneven at index %d in node %s", i, t))
+      }
+      if !t.children[i].max().lessThan(k) {
+        panic(fmt.Sprintf("tree out of order at index %d in node %s", i, t))
+      }
+      if !k.lessThan(t.children[i+1].min()) {
+        panic(fmt.Sprintf("tree out of order (type 2) at index %d in node %s", i, t))
+      }
+    }
+  } else {
+    for i := 0; i < len(t.keys)-1; i++ {
+      if !t.keys[i].lessThan(t.keys[i+1]) {
+        panic(fmt.Sprintf("tree out of order at index %d in leaf %s", i, t))
+      }
+    }
+  }
+}
+
+func (t *BTree) Traverse(output chan<- Row) {
+  for i, k := range t.keys {
+    if len(t.children) > 0 {
+      t.children[i].Traverse(output)
+    }
+    output <- k
+  }
+  if len(t.children) > 0 {
+    t.children[len(t.children)-1].Traverse(output)
+  }
 }
 
 func (t *BTree) Insert(k Row) (*BTree) {
@@ -136,22 +227,39 @@ func (t *BTree) Insert(k Row) (*BTree) {
   return t
 }
 
+func copyKeys(keys []Row) []Row {
+  c := make([]Row, len(keys))
+  copy(c, keys)
+  return c
+}
+
+// shallow copy
+func copyNodes(nodes []*BTree) []*BTree {
+  c := make([]*BTree, len(nodes))
+  copy(c, nodes)
+  return c
+}
+
+
 // helper function to Insert
 func (t *BTree) insert(k Row) (*BTree, *BTree, Row) {
-  isLeaf := len(t.children) == 0
+  isLeaf := t.IsLeaf()
   found := false
   for i, key := range t.keys {
     if k.lessThan(key) {
       if isLeaf {
-        t.keys = append(append(t.keys[:i], k), t.keys[i:]...)
+        suffix := copyKeys(t.keys[i:])
+        t.keys = append(append(t.keys[:i], k), suffix...)
       } else {
         lTree, rTree, newK := t.children[i].insert(k)
         if rTree == nil {
           t.children[i] = lTree
         } else {
           // split happened
-          t.keys = append(append(t.keys[:i], newK), t.keys[i:]...)
-          t.children = append(append(t.children[:i], lTree, rTree), t.children[i+1:]...)
+          suffix := copyKeys(t.keys[i:])
+          t.keys = append(append(t.keys[:i], newK), suffix...)
+          childrenSuffix := copyNodes(t.children[i+1:])
+          t.children = append(append(t.children[:i], lTree, rTree), childrenSuffix...)
         }
       }
       found = true
@@ -174,7 +282,7 @@ func (t *BTree) insert(k Row) (*BTree, *BTree, Row) {
       } else {
         // split happened
         t.keys = append(t.keys, newK)
-        t.children = append(t.children[:i-1], lTree, rTree)
+        t.children = append(t.children[:i], lTree, rTree)
       }
     }
   }
@@ -182,12 +290,14 @@ func (t *BTree) insert(k Row) (*BTree, *BTree, Row) {
   if len(t.keys) > MAX_NODE_SIZE {
     // need to split
     lTree := BTree {
-      keys: t.keys[:MAX_NODE_SIZE / 2],
-      children: t.children[:MAX_NODE_SIZE / 2 + 1],
+      keys: copyKeys(t.keys[:MAX_NODE_SIZE / 2]),
     }
     rTree := BTree {
-      keys: t.keys[MAX_NODE_SIZE / 2+1:],
-      children: t.children[MAX_NODE_SIZE / 2 + 1:],
+      keys: copyKeys(t.keys[MAX_NODE_SIZE / 2+1:]),
+    }
+    if !t.IsLeaf() {
+      lTree.children = copyNodes(t.children[:MAX_NODE_SIZE / 2 + 1])
+      rTree.children = copyNodes(t.children[MAX_NODE_SIZE / 2 + 1:])
     }
     return &lTree, &rTree, t.keys[MAX_NODE_SIZE / 2]
   }

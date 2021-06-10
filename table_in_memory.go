@@ -1,5 +1,6 @@
 package sql_planner
 import (
+  "fmt"
 )
 
 type ColumnType int
@@ -15,6 +16,9 @@ func (f IntField) lessThan(a interface{}) bool {
 }
 func (f IntField) equals(a interface{}) bool {
   return f == a.(IntField)
+}
+func (f IntField) String() string {
+  return fmt.Sprintf("%d", int(f))
 }
 
 
