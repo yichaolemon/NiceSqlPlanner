@@ -58,8 +58,8 @@ const (
 )
 
 type Column struct {
-  name string
-  columnType ColumnType
+  Name string
+  ColumnType ColumnType
 }
 
 type Table struct {
@@ -86,7 +86,7 @@ func CreateTable(schema []Column, primaryIndex []string, indices ...[]string) (*
   primaryKey := schema[0]
   nameToType := make(map[string]ColumnType, len(schema))
   for _, col := range schema {
-    nameToType[col.name] = col.columnType
+    nameToType[col.Name] = col.ColumnType
   }
   fullIndices := make([]*Index, 0, len(indices))
   for _, index := range indices {
@@ -96,7 +96,7 @@ func CreateTable(schema []Column, primaryIndex []string, indices ...[]string) (*
     }
     for _, indexCol := range index {
       if colType, ok := nameToType[indexCol]; ok {
-        indexSchema = append(indexSchema, Column{name: indexCol, columnType: colType})
+        indexSchema = append(indexSchema, Column{Name: indexCol, ColumnType: colType})
       } else {
         return nil, errors.New("index column names must exist in schema")
       }
@@ -117,7 +117,7 @@ func rowMatchSchema(row Row, schema []Column) error {
     return errors.New("row and table schema length mismatch")
   }
   for i, col := range row {
-    if col.columnType() != schema[i].columnType {
+    if col.columnType() != schema[i].ColumnType {
       return errors.New("row and table schema type mismatch")
     }
   }
@@ -151,12 +151,12 @@ func (i *Index) insert(row Row, tableSchema []Column) {
   // column name -> index in indexSchema
   columnSet := make(map[string]int, len(tableSchema))
   for j, col := range indexSchema {
-    columnSet[col.name] = j
+    columnSet[col.Name] = j
   }
   // loop over the row 
   rowToInsert := make(Row, len(indexSchema))
   for j, col := range row {
-    if indexIndex, exists := columnSet[tableSchema[j].name]; exists {
+    if indexIndex, exists := columnSet[tableSchema[j].Name]; exists {
       // insert it 
       rowToInsert[indexIndex] = col
     } else {
