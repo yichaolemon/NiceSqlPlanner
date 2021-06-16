@@ -204,15 +204,69 @@ func (t *BTree) assertWellFormed(isRoot bool) {
   }
 }
 
-func (t *BTree) Traverse(output chan<- Row) {
-  for i, k := range t.keys {
-    if len(t.children) > 0 {
-      t.children[i].Traverse(output)
+func (t *BTree) TraverseAll(output chan<- Row) {
+  t.TraverseBounded(NegativeInfinity{}, Infinity{}, output)
+}
+
+// traverse every row with the given prefix, in order
+func (t *BTree) TraversePrefix(prefix Row, output chan<- Row) {
+  t.TraverseBounded(PrefixBoundLower{prefix: prefix}, PrefixBoundUpper{prefix: prefix}, output)
+}
+
+// Can be compared to Rows
+type RowBound interface {
+  // Row is greater than (to the right of) bound
+  rowGreaterThan(Row) bool
+  // A bound cannot be "equal to" a row, so rowLessThan = !rowGreaterThan
+}
+
+// infemum for all rows that have a given prefix
+type PrefixBoundLower struct {
+  prefix Row
+}
+func (p PrefixBoundLower) rowGreaterThan(r Row) bool {
+  for i, field := range p.prefix {
+    if r[i].lessThan(field) {
+      return false
     }
-    output <- k
   }
-  if len(t.children) > 0 {
-    t.children[len(t.children)-1].Traverse(output)
+  return true
+}
+// supremum for all rows that have a given prefix
+type PrefixBoundUpper struct {
+  prefix Row
+}
+func (p PrefixBoundUpper) rowGreaterThan(r Row) bool {
+  for i, field := range p.prefix {
+    if field.lessThan(r[i]) {
+      return false
+    }
+  }
+  return true
+}
+type Infinity struct {}
+func (i Infinity) rowGreaterThan(r Row) bool { return false }
+type NegativeInfinity struct {}
+func (i NegativeInfinity) rowGreaterThan(r Row) bool { return true }
+
+// Returns everything to output between lower and upper
+func (t *BTree) TraverseBounded(lower RowBound, upper RowBound, output chan<- Row) {
+  for i, k := range t.keys {
+    // look to the left of k if k > lower.
+    if !t.IsLeaf() && lower.rowGreaterThan(k) {
+      t.children[i].TraverseBounded(lower, upper, output)
+    }
+    // if k > upper, we're done.
+    if upper.rowGreaterThan(k) {
+      return
+    }
+    // k is in range if k > lower.
+    if lower.rowGreaterThan(k) {
+      output <- k
+    }
+  }
+  if !t.IsLeaf() {
+    t.children[len(t.children)-1].TraverseBounded(lower, upper, output)
   }
 }
 
@@ -304,3 +358,4 @@ func (t *BTree) insert(k Row) (*BTree, *BTree, Row) {
 
   return t, nil, nil
 }
+

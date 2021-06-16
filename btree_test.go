@@ -13,7 +13,7 @@ func allKeys(t *BTree) []Row {
   output := make(chan Row)
   go func() {
     defer close(output)
-    t.Traverse(output)
+    t.TraverseAll(output)
   }()
   var all []Row
   for r := range output {
