@@ -228,6 +228,8 @@ func (p PrefixBoundLower) rowGreaterThan(r Row) bool {
   for i, field := range p.prefix {
     if r[i].lessThan(field) {
       return false
+    } else if !r[i].equals(field) {
+      return true
     }
   }
   return true
@@ -238,11 +240,13 @@ type PrefixBoundUpper struct {
 }
 func (p PrefixBoundUpper) rowGreaterThan(r Row) bool {
   for i, field := range p.prefix {
-    if field.lessThan(r[i]) {
+    if r[i].lessThan(field) {
       return false
+    } else if !r[i].equals(field) {
+      return true
     }
   }
-  return true
+  return false
 }
 type Infinity struct {}
 func (i Infinity) rowGreaterThan(r Row) bool { return false }
@@ -258,6 +262,7 @@ func (t *BTree) TraverseBounded(lower RowBound, upper RowBound, output chan<- Ro
     }
     // if k > upper, we're done.
     if upper.rowGreaterThan(k) {
+      fmt.Println("greater than ", i, upper, k)
       return
     }
     // k is in range if k > lower.

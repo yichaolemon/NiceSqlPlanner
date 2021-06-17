@@ -5,6 +5,19 @@ import (
 )
 
 type ColumnType int
+func (c ColumnType) String() string {
+  switch c {
+  case INT:
+    return "int"
+  case STRING:
+    return "string"
+  case BOOL:
+    return "bool"
+  default:
+    return "unknown"
+  }
+}
+
 type Field interface {
   lessThan(a interface{}) bool
   equals(b interface{}) bool
@@ -71,11 +84,19 @@ type Table struct {
   indices []*Index
 }
 
+func (t Table) String() string {
+  return fmt.Sprintf("Schema: %v\nPrimary index:%s\nIndices:%v", t.schema, t.primaryIndex, t.indices)
+}
+
 type Index struct {
   // list of columns to build an index with
   schema []Column
   // B-Tree
   btree *BTree
+}
+
+func (i *Index) String() string {
+  return fmt.Sprintf("{schema: %v, data:\n%s\n}", i.schema, i.btree)
 }
 
 // append s to list only if s not already in list
@@ -182,14 +203,14 @@ func (t Table) TraverseWithIndex(index *Index, prefix Row, output chan<- Row) {
   indexOutput := make(chan Row)
   go func() {
     defer close(indexOutput)
-    index.traversePrefix(prefix, output)
+    index.traversePrefix(prefix, indexOutput)
   }()
 
   for rowFromIndex := range indexOutput {
     rowFromTable := rowFromIndex
     if index != t.primaryIndex {
       primaryIndexPrefix := reorderRowBySchema(rowFromIndex, index.schema, t.primaryIndex.schema)
-      rowFromTable = t.SearchPrimaryIndex(primaryIndexPrefix)
+      rowFromTable = t.searchPrimaryIndex(primaryIndexPrefix)
     }
     rowFromTable = reorderRowBySchema(rowFromTable, t.primaryIndex.schema, t.schema)
 
@@ -197,9 +218,22 @@ func (t Table) TraverseWithIndex(index *Index, prefix Row, output chan<- Row) {
   }
 }
 
+func (t Table) ListWithIndex(index *Index, prefix Row) []Row {
+  allRows := make(chan Row)
+  go func() {
+    defer close(allRows)
+    t.TraverseWithIndex(index, prefix, allRows)
+  }()
+  rowList := make([]Row, 0)
+  for row := range allRows {
+    rowList = append(rowList, row)
+  }
+  return rowList
+}
+
 
 // prefix must contain all fields in the primary index
-func (t Table) SearchPrimaryIndex(prefix Row) Row {
+func (t Table) searchPrimaryIndex(prefix Row) Row {
   // TODO: enforce primary index is unique at write time. otherwise this will deadlock.
   primaryIndexOutput := make(chan Row, 1)
   t.primaryIndex.traversePrefix(prefix, primaryIndexOutput)
