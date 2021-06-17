@@ -205,15 +205,46 @@ func (t *BTree) assertWellFormed(isRoot bool) {
 }
 
 func (t *BTree) TraverseAll(output chan<- Row) {
-  t.TraverseBounded(NegativeInfinity{}, Infinity{}, output)
+  t.TraverseBounded(&QueryPredicate{
+    LowerBound: NegativeInfinity{},
+    UpperBound: Infinity{},
+    Limit: NoLimit,
+  }, output)
 }
 
 // traverse every row with the given prefix, in order
 func (t *BTree) TraversePrefix(prefix Row, output chan<- Row) {
-  t.TraverseBounded(PrefixBoundLower{prefix: prefix}, PrefixBoundUpper{prefix: prefix}, output)
+  t.TraverseBounded(&QueryPredicate{
+    LowerBound: InclusiveBound(prefix),
+    UpperBound: ExclusiveBound(prefix),
+    Limit: NoLimit,
+  }, output)
 }
 
-// Can be compared to Rows
+func (t *BTree) TraversePaginated(
+  pred QueryPredicate,
+  batchSize int,
+  output chan<- []Row,
+) {
+  predSnapshot := pred
+  for {
+    outputChan := make(chan Row, batchSize)
+    predSnapshot.Limit = Limit(batchSize)
+    t.TraverseBounded(&predSnapshot, outputChan)
+    close(outputChan)
+
+    outputRows := make([]Row, 0, batchSize)
+    for row := range outputChan {
+      outputRows = append(outputRows, row)
+    }
+    predSnapshot.LowerBound = ExclusiveBound(
+      outputRows[len(outputRows)-1],
+    )
+  }
+}
+
+// Can be compared to Rows.
+// A bound cannot be equal to a row.
 type RowBound interface {
   // Row is greater than (to the right of) bound
   rowGreaterThan(Row) bool
@@ -221,11 +252,9 @@ type RowBound interface {
 }
 
 // infemum for all rows that have a given prefix
-type PrefixBoundLower struct {
-  prefix Row
-}
-func (p PrefixBoundLower) rowGreaterThan(r Row) bool {
-  for i, field := range p.prefix {
+type InclusiveBound Row
+func (p InclusiveBound) rowGreaterThan(r Row) bool {
+  for i, field := range p {
     if r[i].lessThan(field) {
       return false
     } else if !r[i].equals(field) {
@@ -235,11 +264,9 @@ func (p PrefixBoundLower) rowGreaterThan(r Row) bool {
   return true
 }
 // supremum for all rows that have a given prefix
-type PrefixBoundUpper struct {
-  prefix Row
-}
-func (p PrefixBoundUpper) rowGreaterThan(r Row) bool {
-  for i, field := range p.prefix {
+type ExclusiveBound Row
+func (p ExclusiveBound) rowGreaterThan(r Row) bool {
+  for i, field := range p {
     if r[i].lessThan(field) {
       return false
     } else if !r[i].equals(field) {
@@ -253,25 +280,57 @@ func (i Infinity) rowGreaterThan(r Row) bool { return false }
 type NegativeInfinity struct {}
 func (i NegativeInfinity) rowGreaterThan(r Row) bool { return true }
 
+type Limit int
+const NoLimit = Limit(-1)
+func (l *Limit) decrement() {
+  if *l == NoLimit {
+    return
+  }
+  *l--
+}
+func (l Limit) usedUp() bool {
+  if l == NoLimit {
+    return false
+  }
+  return l == 0
+}
+
+type QueryPredicate struct {
+  UpperBound RowBound
+  LowerBound RowBound
+  Filter func(Row) bool
+  Limit Limit
+  Descending bool
+}
+
 // Returns everything to output between lower and upper
-func (t *BTree) TraverseBounded(lower RowBound, upper RowBound, output chan<- Row) {
+// Return value is number of rows outputted
+func (t *BTree) TraverseBounded(
+  pred *QueryPredicate,
+  output chan<- Row,
+) {
   for i, k := range t.keys {
+    if pred.Limit.usedUp() {
+      return
+    }
     // look to the left of k if k > lower.
-    if !t.IsLeaf() && lower.rowGreaterThan(k) {
-      t.children[i].TraverseBounded(lower, upper, output)
+    if !t.IsLeaf() && pred.LowerBound.rowGreaterThan(k) {
+      t.children[i].TraverseBounded(pred, output)
     }
     // if k > upper, we're done.
-    if upper.rowGreaterThan(k) {
-      fmt.Println("greater than ", i, upper, k)
+    if pred.UpperBound.rowGreaterThan(k) {
       return
     }
     // k is in range if k > lower.
-    if lower.rowGreaterThan(k) {
-      output <- k
+    if pred.LowerBound.rowGreaterThan(k) {
+      if pred.Filter == nil || pred.Filter(k) {
+        pred.Limit.decrement()
+        output <- k
+      }
     }
   }
   if !t.IsLeaf() {
-    t.children[len(t.children)-1].TraverseBounded(lower, upper, output)
+    t.children[len(t.children)-1].TraverseBounded(pred, output)
   }
 }
 

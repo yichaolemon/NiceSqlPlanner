@@ -195,7 +195,16 @@ func (t Table) Insert(row Row) error {
   return nil
 }
 
-//func (t Table) Delete(key IntField) error {
+func (t Table) Delete(index *Index, prefix Row) error {
+  indexOutput := t.ListWithIndex(index, prefix)
+
+  for rowFromIndex := range indexOutput {
+    // transform the row to the primaryIndex schema
+    
+  }
+}
+
+//func (t Table) Update() error {
 //}
 
 // input prefix row is in the order of the index. output rows are from the main table.
