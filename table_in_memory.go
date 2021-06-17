@@ -184,40 +184,56 @@ func (t Table) TraverseWithIndex(index *Index, prefix Row, output chan<- Row) {
     defer close(indexOutput)
     index.traversePrefix(prefix, output)
   }()
-  for indexOut := range indexOutput {
+
+  for rowFromIndex := range indexOutput {
+    rowFromTable := rowFromIndex
     if index != t.primaryIndex {
-      // TODO: find longest prefix of primaryIndex.schema that index.schema has, populated with indexOut values
-      indexOut = t.SearchPrimaryIndex()
+      primaryIndexPrefix := reorderRowBySchema(rowFromIndex, index.schema, t.primaryIndex.schema)
+      rowFromTable = t.SearchPrimaryIndex(primaryIndexPrefix)
     }
-    // TODO: reorder from primary index schema to t.schema
-    output <- schemaOrder
+    rowFromTable = reorderRowBySchema(rowFromTable, t.primaryIndex.schema, t.schema)
+
+    output <- rowFromTable
   }
 }
 
-// TODO: enforce primary index is unique
+
 // prefix must contain all fields in the primary index
 func (t Table) SearchPrimaryIndex(prefix Row) Row {
+  // TODO: enforce primary index is unique at write time. otherwise this will deadlock.
+  primaryIndexOutput := make(chan Row, 1)
+  t.primaryIndex.traversePrefix(prefix, primaryIndexOutput)
+  return <- primaryIndexOutput
 }
 
-// TODO: general function (copied from internals of Insert) for reordering a row from one schema to another, possibly yielding only a prefix
-
-func (i *Index) insert(row Row, tableSchema []Column) {
-  indexSchema := i.schema
-  // column name -> index in indexSchema
-  columnSet := make(map[string]int, len(tableSchema))
-  for j, col := range indexSchema {
-    columnSet[col.Name] = j
+// general function for reordering a row from one schema to another, possibly yielding only a prefix
+func reorderRowBySchema(row Row, rowSchema []Column, newSchema []Column) Row {
+  columnSet := make(map[Column]int, len(rowSchema))
+  // column -> index in indexSchema
+  for j, col := range rowSchema {
+    columnSet[col] = j
   }
-  // loop over the row 
-  rowToInsert := make(Row, len(indexSchema))
-  for j, col := range row {
-    if indexIndex, exists := columnSet[tableSchema[j].Name]; exists {
+
+  newRow := make(Row, 0, len(newSchema))
+  for _, col := range newSchema {
+    if i, exists := columnSet[col]; exists {
       // insert it 
-      rowToInsert[indexIndex] = col
+      newRow = append(newRow, row[i])
     } else {
-      panic("row and index schema type mismatch")
+      break
     }
   }
+
+  return newRow
+}
+
+// inserting row into index, where the row is in the order of the table schema
+func (i *Index) insert(row Row, tableSchema []Column) {
+  rowToInsert := reorderRowBySchema(row, tableSchema, i.schema)
+  if len(rowToInsert) < len(i.schema) {
+    panic("row and index schema type mismatch")
+  }
+
   i.btree = i.btree.Insert(rowToInsert)
 }
 
