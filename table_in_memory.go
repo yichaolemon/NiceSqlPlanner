@@ -70,6 +70,8 @@ const (
   BOOL ColumnType = 3
 )
 
+const DefaultBatchSize = 5
+
 type Column struct {
   Name string
   ColumnType ColumnType
@@ -195,17 +197,71 @@ func (t Table) Insert(row Row) error {
   return nil
 }
 
-func (t Table) Delete(index *Index, prefix Row) error {
-  indexOutput := t.ListWithIndex(index, prefix)
-
-  for rowFromIndex := range indexOutput {
-    // transform the row to the primaryIndex schema
-    
+func (t Table) BatchInsert(rows []Row) error {
+  for _, row := range rows {
+    err := t.Insert(row)
+    if err != nil {
+      return err
+    }
   }
+  return nil
+}
+
+func (t Table) Delete(index *Index, prefix Row) error {
+  output := make(chan []Row)
+  var err error
+  go func() {
+    defer close(output)
+    err = t.TraverseWithIndexPaginated(index, QueryPredicate{
+      UpperBound: ExclusiveBound(prefix),
+      LowerBound: InclusiveBound(prefix),
+      Limit: NoLimit,
+    }, DefaultBatchSize, output)
+  }()
+
+  for rowBatch := range(output) {
+    for _, row := range rowBatch {
+      t.primaryIndex.btree = t.primaryIndex.btree.Delete(
+        reorderRowBySchema(row, t.schema, t.primaryIndex.schema),
+      )
+      for _, i := range t.indices {
+        i.btree = i.btree.Delete(
+          reorderRowBySchema(row, t.schema, i.schema),
+        )
+      }
+    }
+  }
+  return err
 }
 
 //func (t Table) Update() error {
 //}
+
+func (t Table) TraverseWithIndexPaginated(index *Index, pred QueryPredicate, batchSize int, output chan<- []Row) error {
+  indexOutput := make(chan []Row)
+  var err error
+  go func() {
+    defer close(indexOutput)
+    err = index.btree.TraversePaginated(pred, batchSize, indexOutput)
+  }()
+
+  for rowBatch := range indexOutput {
+    rowFromTableList := make([]Row, 0, batchSize)
+    for _, rowFromIndex := range rowBatch {
+      rowFromTable := rowFromIndex
+      if index != t.primaryIndex {
+        primaryIndexPrefix := reorderRowBySchema(rowFromIndex, index.schema, t.primaryIndex.schema)
+        rowFromTable = t.searchPrimaryIndex(primaryIndexPrefix)
+      }
+      rowFromTable = reorderRowBySchema(rowFromTable, t.primaryIndex.schema, t.schema)
+      rowFromTableList = append(rowFromTableList, rowFromTable)
+    }
+
+    // output each batch to the channel
+    output <- rowFromTableList
+  }
+  return err
+}
 
 // input prefix row is in the order of the index. output rows are from the main table.
 func (t Table) TraverseWithIndex(index *Index, prefix Row, output chan<- Row) {

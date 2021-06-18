@@ -1,6 +1,7 @@
 package sql_planner
 import (
   "fmt"
+  "sync"
 )
 
 type Row []Field
@@ -10,9 +11,12 @@ type BTree struct {
   // keys end with the primary key field
   keys []Row
   children []*BTree
+  mutex sync.RWMutex
 }
 
 func (t *BTree) String() string {
+  t.mutex.RLock()
+  defer t.mutex.RUnlock()
   s := "{"
   for i, key := range t.keys {
     if t.IsLeaf() {
@@ -137,6 +141,8 @@ func (t *BTree) delete(k Row) {
 }
 
 func (t *BTree) Delete(k Row) *BTree {
+  t.mutex.Lock()
+  defer t.mutex.Unlock()
   t.delete(k)
   if !t.IsLeaf() && len(t.keys) == 0 {
     return t.children[0]
@@ -166,6 +172,8 @@ func (t *BTree) height() int {
 }
 
 func (t *BTree) AssertWellFormed() {
+  t.mutex.RLock()
+  defer t.mutex.RUnlock()
   t.assertWellFormed(true)
 }
 
@@ -225,21 +233,33 @@ func (t *BTree) TraversePaginated(
   pred QueryPredicate,
   batchSize int,
   output chan<- []Row,
-) {
-  predSnapshot := pred
+) error {
+  predChunk := pred
+  limitRemaining := pred.Limit
   for {
     outputChan := make(chan Row, batchSize)
-    predSnapshot.Limit = Limit(batchSize)
-    t.TraverseBounded(&predSnapshot, outputChan)
+    predChunk.Limit = minLimit(Limit(batchSize), limitRemaining)
+    t.TraverseBounded(&predChunk, outputChan)
     close(outputChan)
 
     outputRows := make([]Row, 0, batchSize)
     for row := range outputChan {
+      limitRemaining.decrement()
       outputRows = append(outputRows, row)
     }
-    predSnapshot.LowerBound = ExclusiveBound(
+    if len(outputRows) == 0 {
+      return nil
+    }
+    predChunk.LowerBound = ExclusiveBound(
       outputRows[len(outputRows)-1],
     )
+    output <- outputRows
+    if limitRemaining.usedUp() {
+      return nil
+    }
+    if !predChunk.Limit.usedUp() {
+      return nil
+    }
   }
 }
 
@@ -294,6 +314,15 @@ func (l Limit) usedUp() bool {
   }
   return l == 0
 }
+func minLimit(a Limit, b Limit) Limit {
+  if a == NoLimit {
+    return b
+  }
+  if b == NoLimit || a < b {
+    return a
+  }
+  return b
+}
 
 type QueryPredicate struct {
   UpperBound RowBound
@@ -309,6 +338,8 @@ func (t *BTree) TraverseBounded(
   pred *QueryPredicate,
   output chan<- Row,
 ) {
+  t.mutex.RLock()
+  defer t.mutex.RUnlock()
   for i, k := range t.keys {
     if pred.Limit.usedUp() {
       return
@@ -318,7 +349,7 @@ func (t *BTree) TraverseBounded(
       t.children[i].TraverseBounded(pred, output)
     }
     // if k > upper, we're done.
-    if pred.UpperBound.rowGreaterThan(k) {
+    if pred.Limit.usedUp() || pred.UpperBound.rowGreaterThan(k) {
       return
     }
     // k is in range if k > lower.
@@ -335,6 +366,8 @@ func (t *BTree) TraverseBounded(
 }
 
 func (t *BTree) Insert(k Row) (*BTree) {
+  t.mutex.Lock()
+  defer t.mutex.Unlock()
   lTree, rTree, r := t.insert(k)
 
   // root has split, need to create a new root

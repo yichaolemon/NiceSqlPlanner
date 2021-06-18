@@ -7,17 +7,7 @@ import (
 )
 
 func TestCreateTable(t *testing.T) {
-  table, err := CreateTable(
-    []Column{
-      {Name: "email", ColumnType: STRING},
-      {Name: "age", ColumnType: INT},
-      {Name: "id", ColumnType: INT},
-      {Name: "isActive", ColumnType: BOOL},
-    },
-    []string{"id", "isActive"},
-    []string{"email"},
-  )
-  require.NoError(t, err)
+  table := createTable(t)
 
   require.Equal(t, table.schema, []Column{
     {Name: "email", ColumnType: STRING},
@@ -40,6 +30,61 @@ func TestCreateTable(t *testing.T) {
 }
 
 func TestInsertTable(t *testing.T) {
+  table := createTable(t)
+  rows := insertManyToTable(t, table, 4)
+  fmt.Println(table)
+
+  // search
+  require.Equal(t,
+    table.ListWithIndex(table.indices[0], Row{StringField("doodle@sheen.com")}),
+    []Row{rows[0], rows[3]},
+  )
+  require.Equal(t,
+    table.ListWithIndex(table.primaryIndex, Row{IntField(2)}),
+    []Row{rows[2], rows[1]},
+  )
+}
+
+func TestDeleteTable(t *testing.T) {
+  table := createTable(t)
+
+  // insert a lot of pusheens
+  insertManyToTable(t, table, 100)
+
+  fmt.Println(table)
+
+  // delete by email
+  require.NoError(t, table.Delete(table.indices[0], Row{StringField("toto@sheen.com")}))
+  require.Len(t, table.ListWithIndex(table.indices[0], Row{StringField("toto@sheen.com")}), 0)
+  require.Len(t, table.ListWithIndex(table.indices[0], Row{StringField("doodle@sheen.com")}), 50)
+
+  // delete by primary key
+  table.Delete(table.primaryIndex, Row{IntField(1)})
+  require.Len(t, table.ListWithIndex(table.indices[0], Row{StringField("doodle@sheen.com")}), 49)
+}
+
+func insertManyToTable(t *testing.T, table *Table, count int) []Row {
+  var err error
+  rowTemplates := []Row{
+    {StringField("doodle@sheen.com"), IntField(3), IntField(1), BoolField(true)},
+    {StringField("toto@sheen.com"), IntField(21), IntField(2), BoolField(true)},
+    {StringField("toto@sheen.com"), IntField(1), IntField(2), BoolField(false)},
+    {StringField("doodle@sheen.com"), IntField(1), IntField(8), BoolField(true)},
+  }
+  rows := make([]Row, count)
+  for i := range rows {
+    copyTemplate := make(Row, 4)
+    copy(copyTemplate, rowTemplates[i % len(rowTemplates)])
+    copyTemplate[2] = copyTemplate[2].(IntField) + IntField((i / len(rowTemplates)) * 10)
+    rows[i] = copyTemplate
+  }
+  err = table.BatchInsert(rows)
+  require.NoError(t, err)
+  return rows
+}
+
+// helper functions 
+func createTable(t *testing.T) *Table {
   table, err := CreateTable(
     []Column{
       {Name: "email", ColumnType: STRING},
@@ -51,41 +96,5 @@ func TestInsertTable(t *testing.T) {
     []string{"email"},
   )
   require.NoError(t, err)
-
-  doodlesheen1 := Row{
-    StringField("doodle@sheen.com"), IntField(3), IntField(1), BoolField(true),
-  }
-  err = table.Insert(doodlesheen1)
-  require.NoError(t, err)
-
-  totosheen1 := Row{
-    StringField("toto@sheen.com"), IntField(21), IntField(2), BoolField(true),
-  }
-  table.Insert(totosheen1)
-  require.NoError(t, err)
-
-  totosheen2 := Row{
-    StringField("toto@sheen.com"), IntField(1), IntField(2), BoolField(false),
-  }
-  table.Insert(totosheen2)
-  require.NoError(t, err)
-
-  doodlesheen2 := Row{
-    StringField("doodle@sheen.com"), IntField(1), IntField(8), BoolField(true),
-  }
-  table.Insert(doodlesheen2)
-  require.NoError(t, err)
-  fmt.Println(table)
-
-  // search
-  require.Equal(t,
-    table.ListWithIndex(table.indices[0], Row{StringField("doodle@sheen.com")}),
-    []Row{doodlesheen1, doodlesheen2},
-  )
-  require.Equal(t,
-    table.ListWithIndex(table.primaryIndex, Row{IntField(2)}),
-    []Row{totosheen2, totosheen1},
-  )
+  return table
 }
-
-
