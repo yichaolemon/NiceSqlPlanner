@@ -1,7 +1,8 @@
 package sql_planner
+
 import (
-  "fmt"
-  "sync"
+	"fmt"
+	"sync"
 )
 
 type Row []Field
@@ -365,9 +366,19 @@ func (t *BTree) TraverseBounded(
   }
 }
 
+var insertInjection func() chan struct{}
+
 func (t *BTree) Insert(k Row) (*BTree) {
   t.mutex.Lock()
   defer t.mutex.Unlock()
+
+  if insertInjection != nil {
+    injectedChan := insertInjection()
+    <-injectedChan
+    // a test can force this function to get stuck on this line.
+    <-injectedChan
+  }
+
   lTree, rTree, r := t.insert(k)
 
   // root has split, need to create a new root

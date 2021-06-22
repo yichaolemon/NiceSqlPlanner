@@ -1,9 +1,10 @@
 package sql_planner
 
 import (
-  "fmt"
-  "testing"
-  "github.com/stretchr/testify/require"
+	"fmt"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateTable(t *testing.T) {
@@ -97,4 +98,51 @@ func createTable(t *testing.T) *Table {
   )
   require.NoError(t, err)
   return table
+}
+
+func TestUpdate(t *testing.T) {
+  table := createTable(t)
+  insertManyToTable(t, table, 4)
+  require.NoError(t, table.Update(table.primaryIndex, QueryPredicate{
+    LowerBound: InclusiveBound(Row{IntField(1)}),
+    UpperBound: ExclusiveBound(Row{IntField(1)}),
+    Limit: Limit(1),
+  }, map[Column]Field{{Name: "age", ColumnType: INT}: IntField(4)}))
+  require.Equal(t, table.ListWithIndex(table.primaryIndex, Row{IntField(1)}),
+    []Row{{StringField("doodle@sheen.com"), IntField(4), IntField(1), BoolField(true)}})
+}
+
+func TestMultipleConcurrentOperations(t *testing.T) {
+  table := createTable(t)
+  insertManyToTable(t, table, 4)
+  // long-running update
+  insertChan := make(chan struct{})
+  insertInjection = func() chan struct{} {
+    return insertChan
+  }
+  updateDone := make(chan struct{})
+  go func() {
+    require.NoError(t, table.Update(table.primaryIndex, QueryPredicate{
+      LowerBound: InclusiveBound(Row{IntField(1)}),
+      UpperBound: ExclusiveBound(Row{IntField(1)}),
+      Limit: Limit(1),
+    }, map[Column]Field{{Name: "age", ColumnType: INT}: IntField(4)}))
+    require.Equal(t, table.ListWithIndex(table.primaryIndex, Row{IntField(1)}),
+      []Row{{StringField("doodle@sheen.com"), IntField(4), IntField(1), BoolField(true)}})
+    updateDone <- struct{}{}
+  }()
+  insertChan <- struct{}{}
+  // now the btree.go code is stuck
+  insertInjection = nil
+  
+  // Try a point-read.
+  rows := table.ListWithIndex(table.primaryIndex, Row{IntField(8)})
+  require.Equal(t, rows, []Row{
+    {StringField("doodle@sheen.com"), IntField(1), IntField(8), BoolField(true)},
+  })
+
+  
+  // allow the original update to finish
+  insertChan <- struct{}{}
+  <-updateDone
 }
